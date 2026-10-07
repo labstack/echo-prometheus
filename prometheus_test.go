@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -386,4 +387,32 @@ func unregisterDefaults(subsystem string) {
 		Name:      "request_size_bytes",
 		Help:      "The HTTP request sizes in bytes.",
 	})
+}
+
+func TestRunPushGatewayGatherer_UnreachableGateway(t *testing.T) {
+	// Start and immediately close a server so the URL refuses connections.
+	srv := httptest.NewServer(http.NotFoundHandler())
+	url := srv.URL
+	srv.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	var errCount int32
+	config := PushGatewayConfig{
+		PushGatewayURL: url,
+		PushInterval:   10 * time.Millisecond,
+		ErrorHandler: func(err error) error {
+			atomic.AddInt32(&errCount, 1)
+			return nil // keep running
+		},
+	}
+
+	err := RunPushGatewayGatherer(ctx, config)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("expected context deadline exceeded, got: %v", err)
+	}
+	if atomic.LoadInt32(&errCount) == 0 {
+		t.Fatal("expected ErrorHandler to be called for connection errors")
+	}
 }
