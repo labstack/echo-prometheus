@@ -30,7 +30,7 @@ func TestCustomRegistryMetrics(t *testing.T) {
 
 	s, code := requestBody(e, "/metrics")
 	assert.Equal(t, http.StatusOK, code)
-	assert.Contains(t, s, `echo_request_duration_seconds_count{code="404",host="example.com",method="GET",url="/ping"} 1`)
+	assert.Contains(t, s, `echo_request_duration_seconds_count{code="404",host="example.com",method="GET",url=""} 1`)
 }
 
 func TestDefaultRegistryMetrics(t *testing.T) {
@@ -43,7 +43,7 @@ func TestDefaultRegistryMetrics(t *testing.T) {
 
 	s, code := requestBody(e, "/metrics")
 	assert.Equal(t, http.StatusOK, code)
-	assert.Contains(t, s, `myapp_request_duration_seconds_count{code="404",host="example.com",method="GET",url="/ping"} 1`)
+	assert.Contains(t, s, `myapp_request_duration_seconds_count{code="404",host="example.com",method="GET",url=""} 1`)
 
 	unregisterDefaults("myapp")
 }
@@ -59,12 +59,12 @@ func TestPrometheus_Buckets(t *testing.T) {
 
 	body, code := requestBody(e, "/metrics")
 	assert.Equal(t, http.StatusOK, code)
-	assert.Contains(t, body, `echo_request_duration_seconds_bucket{code="404",host="example.com",method="GET",url="/ping",le="0.005"}`, "duration should have time bucket (like, 0.005s)")
-	assert.NotContains(t, body, `echo_request_duration_seconds_bucket{code="404",host="example.com",method="GET",url="/ping",le="512000"}`, "duration should NOT have a size bucket (like, 512K)")
-	assert.Contains(t, body, `echo_request_size_bytes_bucket{code="404",host="example.com",method="GET",url="/ping",le="1024"}`, "request size should have a 1024k (size) bucket")
-	assert.NotContains(t, body, `echo_request_size_bytes_bucket{code="404",host="example.com",method="GET",url="/ping",le="0.005"}`, "request size should NOT have time bucket (like, 0.005s)")
-	assert.Contains(t, body, `echo_response_size_bytes_bucket{code="404",host="example.com",method="GET",url="/ping",le="1024"}`, "response size should have a 1024k (size) bucket")
-	assert.NotContains(t, body, `echo_response_size_bytes_bucket{code="404",host="example.com",method="GET",url="/ping",le="0.005"}`, "response size should NOT have time bucket (like, 0.005s)")
+	assert.Contains(t, body, `echo_request_duration_seconds_bucket{code="404",host="example.com",method="GET",url="",le="0.005"}`, "duration should have time bucket (like, 0.005s)")
+	assert.NotContains(t, body, `echo_request_duration_seconds_bucket{code="404",host="example.com",method="GET",url="",le="512000"}`, "duration should NOT have a size bucket (like, 512K)")
+	assert.Contains(t, body, `echo_request_size_bytes_bucket{code="404",host="example.com",method="GET",url="",le="1024"}`, "request size should have a 1024k (size) bucket")
+	assert.NotContains(t, body, `echo_request_size_bytes_bucket{code="404",host="example.com",method="GET",url="",le="0.005"}`, "request size should NOT have time bucket (like, 0.005s)")
+	assert.Contains(t, body, `echo_response_size_bytes_bucket{code="404",host="example.com",method="GET",url="",le="1024"}`, "response size should have a 1024k (size) bucket")
+	assert.NotContains(t, body, `echo_response_size_bytes_bucket{code="404",host="example.com",method="GET",url="",le="0.005"}`, "response size should NOT have time bucket (like, 0.005s)")
 }
 
 func TestMiddlewareConfig_Skipper(t *testing.T) {
@@ -95,8 +95,8 @@ func TestMiddlewareConfig_Skipper(t *testing.T) {
 
 	body := out.String()
 	assert.Contains(t, body, `echo_request_duration_seconds_count{code="200",host="example.com",method="GET",url="/test"} 1`)
-	assert.Contains(t, body, `echo_request_duration_seconds_count{code="404",host="example.com",method="GET",url="/ping"} 1`)
-	assert.Contains(t, body, `echo_request_duration_seconds_count{code="404",host="example.com",method="GET",url="/ping"} 1`)
+	assert.Contains(t, body, `echo_request_duration_seconds_count{code="404",host="example.com",method="GET",url=""} 1`)
+	assert.Contains(t, body, `echo_request_duration_seconds_count{code="404",host="example.com",method="GET",url=""} 1`)
 	assert.NotContains(t, body, `test_ignore`) // because we skipped
 }
 
@@ -284,7 +284,7 @@ func TestRunPushGatewayGatherer(t *testing.T) {
 func TestSetPathFor404NoMatchingRoute(t *testing.T) {
 	e := echo.New()
 
-	e.Use(NewMiddlewareWithConfig(MiddlewareConfig{DoNotUseRequestPathFor404: true, Subsystem: defaultSubsystem}))
+	e.Use(NewMiddlewareWithConfig(MiddlewareConfig{Subsystem: defaultSubsystem}))
 	e.GET("/metrics", NewHandler())
 
 	assert.Equal(t, http.StatusNotFound, request(e, "/nonExistentPath"))
@@ -297,12 +297,30 @@ func TestSetPathFor404NoMatchingRoute(t *testing.T) {
 	unregisterDefaults(defaultSubsystem)
 }
 
+// TestUseRequestPathFor404 tests that the url is included in the metric when the 404 response is due to no matching
+// route and UseRequestPathFor404 is enabled
+func TestUseRequestPathFor404(t *testing.T) {
+	e := echo.New()
+
+	e.Use(NewMiddlewareWithConfig(MiddlewareConfig{UseRequestPathFor404: true, Subsystem: defaultSubsystem}))
+	e.GET("/metrics", NewHandler())
+
+	assert.Equal(t, http.StatusNotFound, request(e, "/nonExistentPath"))
+
+	s, code := requestBody(e, "/metrics")
+	assert.Equal(t, http.StatusOK, code)
+	assert.Contains(t, s, fmt.Sprintf(`%s_request_duration_seconds_count{code="404",host="example.com",method="GET",url="/nonExistentPath"} 1`, defaultSubsystem))
+	assert.NotContains(t, s, fmt.Sprintf(`%s_request_duration_seconds_count{code="404",host="example.com",method="GET",url=""} 1`, defaultSubsystem))
+
+	unregisterDefaults(defaultSubsystem)
+}
+
 // TestSetPathFor404Logic tests that the url is included in the metric when the 404 response is due to logic
 func TestSetPathFor404Logic(t *testing.T) {
 	unregisterDefaults("myapp")
 	e := echo.New()
 
-	e.Use(NewMiddlewareWithConfig(MiddlewareConfig{DoNotUseRequestPathFor404: true, Subsystem: defaultSubsystem}))
+	e.Use(NewMiddlewareWithConfig(MiddlewareConfig{Subsystem: defaultSubsystem}))
 	e.GET("/metrics", NewHandler())
 
 	e.GET("/sample", func(c *echo.Context) error {
@@ -322,7 +340,7 @@ func TestSetPathFor404Logic(t *testing.T) {
 func TestInvalidUTF8PathIsFixed(t *testing.T) {
 	e := echo.New()
 
-	e.Use(NewMiddlewareWithConfig(MiddlewareConfig{Subsystem: defaultSubsystem}))
+	e.Use(NewMiddlewareWithConfig(MiddlewareConfig{UseRequestPathFor404: true, Subsystem: defaultSubsystem}))
 	e.GET("/metrics", NewHandler())
 
 	assert.Equal(t, http.StatusNotFound, request(e, "/../../WEB-INF/web.xml\xc0\x80.jsp"))
