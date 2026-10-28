@@ -53,6 +53,14 @@ type MiddlewareConfig struct {
 
 	// LabelFuncs allows adding custom labels in addition to default labels. When key has same name with default label
 	// it replaces default one.
+	//
+	// The default `host` label is taken from the request `Host` header, which the client controls. When the server is
+	// reachable without a proxy that only passes known hosts, every distinct value creates new metrics. To drop the
+	// label, return an empty value; Prometheus treats a label with an empty value as absent:
+	//
+	//	LabelFuncs: map[string]echoprometheus.LabelValueFunc{
+	//		"host": func(c *echo.Context, err error) string { return "" },
+	//	}
 	LabelFuncs map[string]LabelValueFunc
 
 	// HistogramOptsFunc allows to change options for metrics of type histogram before metric is registered to Registerer
