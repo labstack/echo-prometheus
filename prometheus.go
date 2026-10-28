@@ -73,6 +73,13 @@ type MiddlewareConfig struct {
 	// metrics that need incremented/observed.
 	AfterNext func(c *echo.Context, err error)
 
+	// DisableRequestSizeMetric disables the `request_size_bytes` histogram. Each histogram adds a series per bucket
+	// for every label combination.
+	DisableRequestSizeMetric bool
+
+	// DisableResponseSizeMetric disables the `response_size_bytes` histogram.
+	DisableResponseSizeMetric bool
+
 	timeNow func() time.Time
 
 	// If DoNotUseRequestPathFor404 is true, all 404 responses (due to non-matching route) will have the same `url` label and
@@ -202,32 +209,38 @@ func (conf MiddlewareConfig) ToMiddleware() (echo.MiddlewareFunc, error) {
 		return nil, rErr
 	}
 
-	responseSize := prometheus.NewHistogramVec(
-		conf.HistogramOptsFunc(prometheus.HistogramOpts{
-			Namespace: conf.Namespace,
-			Subsystem: conf.Subsystem,
-			Name:      "response_size_bytes",
-			Help:      "The HTTP response sizes in bytes.",
-			Buckets:   sizeBuckets,
-		}),
-		labelNames,
-	)
-	if err := conf.Registerer.Register(responseSize); err != nil {
-		return nil, err
+	var responseSize *prometheus.HistogramVec
+	if !conf.DisableResponseSizeMetric {
+		responseSize = prometheus.NewHistogramVec(
+			conf.HistogramOptsFunc(prometheus.HistogramOpts{
+				Namespace: conf.Namespace,
+				Subsystem: conf.Subsystem,
+				Name:      "response_size_bytes",
+				Help:      "The HTTP response sizes in bytes.",
+				Buckets:   sizeBuckets,
+			}),
+			labelNames,
+		)
+		if err := conf.Registerer.Register(responseSize); err != nil {
+			return nil, err
+		}
 	}
 
-	requestSize := prometheus.NewHistogramVec(
-		conf.HistogramOptsFunc(prometheus.HistogramOpts{
-			Namespace: conf.Namespace,
-			Subsystem: conf.Subsystem,
-			Name:      "request_size_bytes",
-			Help:      "The HTTP request sizes in bytes.",
-			Buckets:   sizeBuckets,
-		}),
-		labelNames,
-	)
-	if rErr := conf.Registerer.Register(requestSize); rErr != nil {
-		return nil, rErr
+	var requestSize *prometheus.HistogramVec
+	if !conf.DisableRequestSizeMetric {
+		requestSize = prometheus.NewHistogramVec(
+			conf.HistogramOptsFunc(prometheus.HistogramOpts{
+				Namespace: conf.Namespace,
+				Subsystem: conf.Subsystem,
+				Name:      "request_size_bytes",
+				Help:      "The HTTP request sizes in bytes.",
+				Buckets:   sizeBuckets,
+			}),
+			labelNames,
+		)
+		if rErr := conf.Registerer.Register(requestSize); rErr != nil {
+			return nil, rErr
+		}
 	}
 
 	return func(next echo.HandlerFunc) echo.HandlerFunc {
@@ -241,7 +254,10 @@ func (conf MiddlewareConfig) ToMiddleware() (echo.MiddlewareFunc, error) {
 			if conf.BeforeNext != nil {
 				conf.BeforeNext(c)
 			}
-			reqSz := computeApproximateRequestSize(c.Request())
+			reqSz := 0
+			if requestSize != nil {
+				reqSz = computeApproximateRequestSize(c.Request())
+			}
 
 			start := conf.timeNow()
 			err := next(c)
@@ -277,17 +293,21 @@ func (conf MiddlewareConfig) ToMiddleware() (echo.MiddlewareFunc, error) {
 			} else {
 				return fmt.Errorf("failed to label request count metric with values, err: %w", err)
 			}
-			if obs, err := requestSize.GetMetricWithLabelValues(values...); err == nil {
-				obs.Observe(float64(reqSz))
-			} else {
-				return fmt.Errorf("failed to label request size metric with values, err: %w", err)
-			}
-			if obs, err := responseSize.GetMetricWithLabelValues(values...); err == nil {
-				if resp != nil {
-					obs.Observe(float64(resp.Size))
+			if requestSize != nil {
+				if obs, err := requestSize.GetMetricWithLabelValues(values...); err == nil {
+					obs.Observe(float64(reqSz))
+				} else {
+					return fmt.Errorf("failed to label request size metric with values, err: %w", err)
 				}
-			} else {
-				return fmt.Errorf("failed to label response size metric with values, err: %w", err)
+			}
+			if responseSize != nil {
+				if obs, err := responseSize.GetMetricWithLabelValues(values...); err == nil {
+					if resp != nil {
+						obs.Observe(float64(resp.Size))
+					}
+				} else {
+					return fmt.Errorf("failed to label response size metric with values, err: %w", err)
+				}
 			}
 
 			return err

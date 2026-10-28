@@ -67,6 +67,26 @@ func TestPrometheus_Buckets(t *testing.T) {
 	assert.NotContains(t, body, `echo_response_size_bytes_bucket{code="404",host="example.com",method="GET",url="/ping",le="0.005"}`, "response size should NOT have time bucket (like, 0.005s)")
 }
 
+func TestMiddlewareConfig_DisableSizeMetrics(t *testing.T) {
+	e := echo.New()
+
+	customRegistry := prometheus.NewRegistry()
+	e.Use(NewMiddlewareWithConfig(MiddlewareConfig{
+		Registerer:                customRegistry,
+		DisableRequestSizeMetric:  true,
+		DisableResponseSizeMetric: true,
+	}))
+	e.GET("/metrics", NewHandlerWithConfig(HandlerConfig{Gatherer: customRegistry}))
+
+	assert.Equal(t, http.StatusNotFound, request(e, "/ping"))
+
+	body, code := requestBody(e, "/metrics")
+	assert.Equal(t, http.StatusOK, code)
+	assert.Contains(t, body, `echo_request_duration_seconds_count{code="404",host="example.com",method="GET",url="/ping"} 1`)
+	assert.NotContains(t, body, `echo_request_size_bytes`)
+	assert.NotContains(t, body, `echo_response_size_bytes`)
+}
+
 func TestMiddlewareConfig_Skipper(t *testing.T) {
 	e := echo.New()
 
